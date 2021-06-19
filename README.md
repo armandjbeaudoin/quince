@@ -6,10 +6,10 @@ Post-processor for grain-average data with consideration of equilibrium and inco
 ## Procedure
 
 * Generate files with coordinates and orientation matrices
-** files for the single measurement (#20) of the Ti7Al creep are available in data subdirectory
-** _would be nice to have a means of doing this without a hexrd installation_
+  * files for the single measurement (#20) of the Ti7Al creep are available in data subdirectory
+  * _would be nice to have a means of doing this without a hexrd installation_
 * Generate the mesh using neper
-  * tesselation
+  * tesselation (using center of mass positions in data/coords_0020.dat)
 
         neper -T -n 716 -morphooptiini "coo:file(data/coords_0020.dat)" -dim 3 -domain "cube(1.0,1.0,1.0):translate(-0.5,-0.5,-0.5)" -morpho voronoi -ori uniform -oricrysym hexagonal -regularization 1  -format tess -o mesh/creep_0020.tes
   * mesh
