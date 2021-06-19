@@ -1,3 +1,16 @@
+# Files from mesh generation
+mesh/creep_0020_facet_region.xml
+mesh/creep_0020.tess
+mesh/creep_0020.msh
+mesh/creep_0020.xml
+mesh/creep_0020_physical_region.xml
+
+# Files from simulation
+results/ue_0020.h5
+results/ue_0020.xdmf
+results/X_0020.h5
+results/X_0020.xdmf
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
