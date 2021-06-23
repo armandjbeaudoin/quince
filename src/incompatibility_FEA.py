@@ -154,7 +154,7 @@ class elasGrains:
                            [c[1], c[1], c[0],      0,      0,      0],
                            [0,    0,    0,    2*c[2],      0,      0],
                            [0,    0,    0,         0, 2*c[2],      0],
-                           [0,    0,    0,         0,      0,  2*c[5]]] )
+                           [0,    0,    0,         0,      0,  2*c[2]]] )
 
     # To derive stress from strain tensor
     def sigc6_e(self,eps):
