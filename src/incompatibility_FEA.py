@@ -175,7 +175,7 @@ class elasGrains:
         
         self.bc_elas = bc_list
         
-    def elasticity_problem(self,reuse_PC=False):
+    def elasticity_problem(self,reuse_PC=False, rtol=1e-8, atol=1e-12):
         """Setup the elasticity solver.
         
         The petsc_amg preconditioner is used, with code taken from 
@@ -205,7 +205,9 @@ class elasGrains:
         # Create CG Krylov solver and turn convergence monitoring on
         self.elasticity_solver = PETScKrylovSolver("cg", self.pc_Eq)
         self.elasticity_solver.parameters["monitor_convergence"] = True
-
+        self.elasticity_solver.parameters["relative_tolerance"] = rtol
+        self.elasticity_solver.parameters["absolute_tolerance"] = atol
+        
         if reuse_PC:
             self.elasticity_solver.set_reuse_preconditioner(True)
             
@@ -280,7 +282,7 @@ class elasGrains:
         return resid
 
     
-    def incompatibility_problem(self,reuse_PC=False):
+    def incompatibility_problem(self,reuse_PC=False, rtol=1e-8, atol=1e-12):
         """Setup the incompatibility solver.
         
         Keyword Arguments:
@@ -311,8 +313,9 @@ class elasGrains:
             
         # Set the Krylov solver type and set tolerances
         self.ksp_X.setType("cg")
-        self.ksp_X.setTolerances(rtol=1.0e-6, atol=1.0e-10, divtol=1.0e10, max_it=50)
-
+#         self.ksp_X.setTolerances(rtol=1.0e-6, atol=1.0e-10, divtol=1.0e10, max_it=50)
+        self.ksp_X.setTolerances(rtol=rtol, atol=atol, divtol=1.0e10, max_it=50)
+        
         # Get the preconditioner and set type (HYPRE AMS)
         self.pc_X = self.ksp_X.getPC()
         self.pc_X.setType("hypre")
@@ -348,7 +351,11 @@ class elasGrains:
         # Turn on monitoring of residual
         self.opts = PETSc.Options()
         self.opts.setValue("inc_ksp_monitor_true_residual", None)
-
+        
+        # Tolerances are set above, could be modified using inc_ prefix
+#         self.opts.setValue("inc_ksp_rtol", 1e-10)
+#         self.opts.setValue("inc_ksp_atol", 1e-16)
+        
         self.pc_X.setOptionsPrefix("inc_")
         self.pc_X.setFromOptions()
 
@@ -379,7 +386,7 @@ class elasGrains:
             self.ksp_X.solve(as_backend_type(b_X).vec(), as_backend_type(T1.vector()).vec())
 
             # Show linear solver details
-#             self.ksp_X.view()
+            self.ksp_X.view()
 
             # Solve 2nd system
             L_X = inner(self.strain_diff_2, curl(self.inc_v0))*dx
