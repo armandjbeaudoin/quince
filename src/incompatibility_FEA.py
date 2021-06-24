@@ -230,7 +230,11 @@ class elasGrains:
         res -- the residual error between experimental and simulated grain averages
         """
         
-        self.estf = self.Chcp( x[0], x[1], x[2], x[3], x[4] )
+        if x['Crystal_Structure'] == "Cubic":
+            self.estf = self.Ccubic( x['Stiffness'][0], x['Stiffness'][1], x['Stiffness'][2] )
+
+        elif x['Crystal_Structure'] == "HCP":
+            self.estf = self.Chcp( x['Stiffness'][0], x['Stiffness'][1], x['Stiffness'][2], x['Stiffness'][3], x['Stiffness'][4] )
 
         # Update orientation
         for n in range(9):
