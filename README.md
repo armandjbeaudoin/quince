@@ -8,7 +8,7 @@ Post-processor for grain-average data with consideration of equilibrium and inco
 * Generate files with coordinates and orientation matrices
   * files for the single measurement (#20) of the Ti7Al creep are available in data subdirectory
   * an example  spyder script to generate the files from hexrd grains.out is also in the data subdirectory 
-  * _is hexrd installation needed?_
+  * _hexrd3 is required_
 * Generate the mesh using neper
   * tesselation (using center of mass positions in data/coords_0020.dat)
 
@@ -20,4 +20,7 @@ Post-processor for grain-average data with consideration of equilibrium and inco
 
         dolfin-convert mesh/creep_0020.msh mesh/creep_0020.xml
 * Run model
- * jupyter notebook is notebooks/eq_inc.ipynb
+  * jupyter notebook is notebooks/eq_inc.ipynb
+  * a python script, derived from the notebook, is in the src directory
+  * the output **xdmf** files will be placed in the results directory, and may be visualized using paraview
+  
