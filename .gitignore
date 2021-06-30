@@ -8,6 +8,8 @@ mesh/creep_0020_physical_region.xml
 # Files from simulation
 results/ue_0020.h5
 results/ue_0020.xdmf
+results/Ue_comp_0020.h5
+results/Ue_comp_0020.xdmf
 results/X_0020.h5
 results/X_0020.xdmf
 

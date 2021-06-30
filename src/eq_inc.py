@@ -27,8 +27,14 @@ from src.incompatibility_FEA import *
 # In[2]:
 
 
-#%%
-x_0 = np.array((162400.0, 180700.0, 46700.0, 92000.0, 69000.0))
+# x_0 is the values of the stiffness tensor #MPa
+# Crystal_Structure = 'HCP' order of stiffness values Stiffness: np.array((c11, c33, c44, c12, c13))
+# Crystal_Structure = 'Cubic' order of stiffness values Stiffness: np.array((c11, c12, c44))
+
+Crystal_Structure = 'HCP'
+#Stiffness =  np.array(( 174800.0, 108900.0, 106700.0 ))
+Stiffness = np.array((162400.0, 180700.0, 46700.0, 92000.0, 69000.0))
+x_0 = {"Crystal_Structure": Crystal_Structure, "Stiffness": Stiffness}
 
 mesh_dir   = '../mesh/'
 
@@ -51,7 +57,6 @@ eg = elasGrains(mesh_file,rotations_file,strains_file)
 # In[3]:
 
 
-#%%
 # Minimal "pointwise" boundary conditions
 def boundary_0_0(x, on_boundary):
     tol = 1E-9
@@ -85,14 +90,12 @@ eg.applyBC( [bc1, bc2a, bc2b, bc4] )
 # In[4]:
 
 
-#%%
 get_ipython().run_line_magic('time', 'eg.elasticity_problem(reuse_PC=True)')
 
 
 # In[5]:
 
 
-#%%
 get_ipython().run_line_magic('time', 'eg.incompatibility_problem(reuse_PC=True)')
 
 
@@ -101,7 +104,6 @@ get_ipython().run_line_magic('time', 'eg.incompatibility_problem(reuse_PC=True)'
 # In[6]:
 
 
-#%%
 # Convergence is improved if solution from a prior time step exists
 
 # if int(step) > 0:
@@ -193,14 +195,24 @@ for nn in range(24):
 # X_np = np.reshape(eg.X.vector().get_local(),(len(eg.grains.array()),9))
 
 
-# In[11]:
+# In[8]:
 
 
-#%%
+# compatible part of the elastic distortion
+
+Ue_comp = project( grad(eg.ue), eg.TFS, solver_type="cg", preconditioner_type="ilu")
+
+# If the symmetric part is needed:
+# Ue_sym = project( sym(grad(eg.ue)), self.TFS, solver_type="cg", preconditioner_type="ilu")
+
+
+# In[9]:
+
+
 # Write out compatible and incompatible distortions
 
-fFile = XDMFFile(output_dir + "ue_" + step + ".xdmf")
-fFile.write_checkpoint (eg.ue,"ue")
+fFile = XDMFFile(output_dir + "Ue_comp_" + step + ".xdmf")
+fFile.write_checkpoint (Ue_comp,"Ue_comp")
 fFile.close()
 
 fFile = XDMFFile(output_dir + "X_" + step + ".xdmf")
@@ -210,7 +222,7 @@ fFile.close()
 
 # ### Comparison of extension strain with & w/o incompatibility
 
-# In[14]:
+# In[10]:
 
 
 # before

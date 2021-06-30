@@ -23,4 +23,10 @@ Post-processor for grain-average data with consideration of equilibrium and inco
   * jupyter notebook is notebooks/eq_inc.ipynb
   * a python script, derived from the notebook, is in the src directory
   * the output **xdmf** files will be placed in the results directory, and may be visualized using paraview
-  
+
+
+## Notes
+
+* The approach to the incompatibility problem was inspired by the helpful hint in [FEniCS Q&A](https://fenicsproject.org/qa/10114/imposed-current-working-small-difference-original-example) and the suggested [reference](https://ieeexplore.ieee.org/document/497323). 
+  * The incompatibility problem is solved as three independent row vector problems
+  * The HYPRE AMS solver is used, however a CG solver also works -- following the reference noted above.
