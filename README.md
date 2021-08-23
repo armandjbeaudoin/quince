@@ -6,7 +6,7 @@ Post-processor for grain-average data with consideration of equilibrium and inco
 ## Procedure
 
 * Generate files with coordinates and orientation matrices
-  * files for the single measurement (#20) of the Ti7Al creep are available in data subdirectory
+  * files for the single measurement (#20) of creep in Ti7Al are available in the data subdirectory
   * an example  spyder script to generate the files from hexrd grains.out is also in the data subdirectory 
   * _hexrd3 is required_
 * Generate the mesh using neper
