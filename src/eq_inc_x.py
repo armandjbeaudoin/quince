@@ -8,12 +8,15 @@
 
 # Input files:
 
-mesh_file      = "//home/abeaudoi/sw/git_repos/quince/mesh/creep_0020.msh"
-rotations_file = "/home/abeaudoi/sw/git_repos/quince/data/rotations_0020.dat"
-strains_file   = "/home/abeaudoi/sw/git_repos/quince/data/strains_0020.dat"
+mesh_file      = "../mesh/creep_0020"
+rotations_file = "../data/rotations_0020.dat"
+strains_file   = "../data/strains_0020.dat"
 
 # Directory for compiled forms
-cache_dir      = "/home/abeaudoi/sw/git_repos/quince/fenicsx_cache"
+cache_dir      = "../fenicsx_cache"
+
+# Output file name
+stress_field_VTX_name = '../results/quince_stress.bp'
 
 y_displacement = 0.00405
 
@@ -77,8 +80,21 @@ rank = comm.Get_rank()
 
 
 # Read mesh from gmsh .msh file, using gmshio
+# domain, cell_tags, facet_tags = gmshio.read_from_msh(mesh_file + '.msh', MPI.COMM_WORLD, 0, gdim=3)
 
-domain, cell_tags, facet_tags = gmshio.read_from_msh(mesh_file, MPI.COMM_WORLD, 0, gdim=3)
+
+# In[ ]:
+
+
+# Read from .xdmf
+f_mesh = io.XDMFFile(MPI.COMM_WORLD, mesh_file + '.xdmf', "r")
+domain = f_mesh.read_mesh()
+cell_tags = f_mesh.read_meshtags(domain,name='Cell tags')
+f_mesh.close()
+
+
+# In[ ]:
+
 
 # Create facet to cell connectivity required to determine boundary facets
 tdim = domain.topology.dim
@@ -197,11 +213,7 @@ for i in range(n_grains):
     if rank==0 and (i%100)==0:
         print(i,flush=True)
 
-    grain_forms_compiled.append( fem.form(eij*dx_grain[i], jit_params=jit_parameters) )
-            
-#             sim_avg[i,(3*ii+jj)] = comm.allreduce( \
-#                 fem.assemble_scalar(fem.form(sim_strn[ii,jj]*dx_grain[i])) / vol_grain[i],
-#                 op = MPI.SUM)                
+    grain_forms_compiled.append( fem.form(eij*dx_grain[i], jit_params=jit_parameters) )               
             
 print(rank,'form compilation',time.process_time() - start_time)
 
@@ -217,8 +229,6 @@ eij.interpolate(lambda x: np.ones((x.shape[1])))
 for i in range(n_grains):
     vol_grain[i] = comm.allreduce( fem.assemble_scalar(grain_forms_compiled[i]), op = MPI.SUM)
     v_total += vol_grain[i]
-#     if rank==0:
-#         print(i,vol_grain[i],flush=True)
     
 if rank==0:
     print('Volume is',v_total)
@@ -232,8 +242,6 @@ sim_avg = np.zeros((n_grains,9))
 start_time = time.process_time()
 
 for j in range(9):
-#     if rank==0:
-#         print(j,flush=True) 
         
     eij.interpolate(eij_expr[j])
     
@@ -290,17 +298,11 @@ Up_expr = fem.Expression( -inc.X, T0.element.interpolation_points() )
 for nn in range(16):
 
     # strain_field should be initialized with experimental strain for first iteration
-    
-#     inc = qx.Incompatibility(domain)
     inc.solve_curl()
-    # Up_expr = fem.Expression( -inc.X, T0.element.interpolation_points() )
     Up.interpolate(Up_expr)
     
-#     ela = qx.Elasticity(domain,use_MUMPS=True)
     ela.solve_elasticity(y_displacement)
-#     sim_strn_expr = fem.Expression( ufl.sym(ufl.grad(ela.uh) - Up), T0.element.interpolation_points())
     sim_strn.interpolate(sim_strn_expr)
-#     project(ufl.sym(ufl.grad(ela.uh) - Up),sim_strn)
     
     # Develop average strain from elasticity simulation   
     for j in range(9):
@@ -317,12 +319,30 @@ for nn in range(16):
             
     s_avg  = qx.tprop2grains(sim_avg,T0,cell_tags)
     
-    # s_avg being re-defined, but not updated in expression????
-    #if nn==0:
+    # should be fixed, not re-defining s_avg, to compile only once
+    # if nn==0:
     strain_field_expr = fem.Expression( exp_strain + (sim_strn-s_avg), T0.element.interpolation_points() )
         
     strain_field.interpolate( strain_field_expr )
     
+
+
+# In[ ]:
+
+
+# Write stress field to .bp file
+
+# DG1 space needed to write stress field
+T_DG1 = fem.TensorFunctionSpace(domain, ('DG', 1))
+sigma_DG1  = fem.Function(T_DG1)
+sigma_expr_DG1 = fem.Expression(qx.sigs_e(strain_field),
+                                    T_DG1.element.interpolation_points())
+
+sigma_DG1.interpolate(sigma_expr_DG1)
+
+vtx_sigma = io.VTXWriter(domain.comm, stress_field_VTX_name, [sigma_DG1._cpp_object])
+vtx_sigma.write(0)
+vtx_sigma.close()
 
 
 # In[ ]:
