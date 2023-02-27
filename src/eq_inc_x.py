@@ -16,9 +16,13 @@ strains_file   = "../data/strains_0020.dat"
 cache_dir      = "../fenicsx_cache"
 
 # Output file name
+output_file_name = '../results/quincex.xdmf'
 stress_field_VTX_name = '../results/quince_stress.bp'
 
 y_displacement = 0.00405
+
+# Tolerance on relative strain norm
+strn_tolerance = 0.02
 
 
 # In[ ]:
@@ -213,7 +217,7 @@ for i in range(n_grains):
     if rank==0 and (i%100)==0:
         print(i,flush=True)
 
-    grain_forms_compiled.append( fem.form(eij*dx_grain[i], jit_params=jit_parameters) )               
+    grain_forms_compiled.append( fem.form(eij*dx_grain[i], jit_options=jit_parameters) )               
             
 print(rank,'form compilation',time.process_time() - start_time)
 
@@ -250,7 +254,8 @@ for j in range(9):
         sim_avg[i,j] = comm.allreduce( \
             fem.assemble_scalar( grain_forms_compiled[i]) / vol_grain[i],
             op = MPI.SUM)
-            
+
+comm.Barrier()
 print(rank,'Form Execution',time.process_time() - start_time)
 
 
@@ -278,9 +283,11 @@ for j in range(9):
         sim_avg[i,j] = comm.allreduce( \
             fem.assemble_scalar( grain_forms_compiled[i]) / vol_grain[i], op = MPI.SUM)
 
-if (rank==0):
-    print('Experimental strain error',np.linalg.norm(sim_avg[:] - exp_strn[:]))
-    print('Average y displacement is', np.mean(sim_avg[:,4]), flush=True)
+comm.Barrier()
+
+# if (rank==0):
+print(rank, 'Experimental strain error',np.linalg.norm(sim_avg[:] - exp_strn[:]))
+print(rank, 'Average y displacement is', np.mean(sim_avg[:,4]), flush=True)
 
 ref_avg = copy.deepcopy(sim_avg)
 
@@ -292,16 +299,32 @@ ref_avg = copy.deepcopy(sim_avg)
 
 # Initialize potential for incompatibility with piecewise constant experimental strain field
 strain_field.interpolate(exp_strain)
-inc = qx.Incompatibility(domain,strain_field)
+# comm.Barrier()    
+# print(rank, 'Before Incompatibility initialize', flush=True)
+inc = qx.Incompatibility(domain,strain_field,use_solver='cg',view_solver=True)
+# comm.Barrier()    
+# print(rank, 'Incompatibility initialize', flush=True)
+
 Up_expr = fem.Expression( -inc.X, T0.element.interpolation_points() )
+
+last_sim_strn = fem.Function(T0)
+diff_sim_strn = fem.Function(T0)
+sim_strn_mag  = fem.Function(T0)
+diff_strn_expr = fem.Expression( (sim_strn-last_sim_strn)*(sim_strn-last_sim_strn), 
+                                  T0.element.interpolation_points() )
+sim_strn_mag_expr = fem.Expression( sim_strn*sim_strn, T0.element.interpolation_points() )
 
 for nn in range(16):
 
     # strain_field should be initialized with experimental strain for first iteration
+
     inc.solve_curl()
+    
     Up.interpolate(Up_expr)
     
     ela.solve_elasticity(y_displacement)
+    
+    last_sim_strn.x.array[:] = sim_strn.x.array[:]
     sim_strn.interpolate(sim_strn_expr)
     
     # Develop average strain from elasticity simulation   
@@ -312,10 +335,23 @@ for nn in range(16):
         for i in range(n_grains):
             sim_avg[i,j] = comm.allreduce( \
                 fem.assemble_scalar( grain_forms_compiled[i]) / vol_grain[i], op = MPI.SUM)
-
+    
+    # Develop the relative error norm as change in strain
+    diff_sim_strn.interpolate(diff_strn_expr)
+    sim_strn_mag.interpolate(sim_strn_mag_expr)
+    
+    diff_sim = comm.allreduce(np.sum(diff_sim_strn.x.array), op=MPI.SUM)
+    comm.Barrier()
+    
+    sim_mag = comm.allreduce(np.sum(sim_strn_mag.x.array), op=MPI.SUM)
+    comm.Barrier()  
+    
+    strn_norm = np.sqrt(diff_sim) / np.sqrt(sim_mag)
+    
     if (rank==0):
-        print(nn,'Experimental strain error',np.linalg.norm(sim_avg[:] - exp_strn[:]))
-        print('  Average y displacement is', np.mean(sim_avg[:,4]), flush=True)
+        print(rank, nn,'Experimental strain error',np.linalg.norm(sim_avg[:] - exp_strn[:]), flush=True)
+        print(rank, '  Average y displacement is', np.mean(sim_avg[:,4]), flush=True)
+        print(rank, '  Relative strain error norm', strn_norm, flush=True)
             
     s_avg  = qx.tprop2grains(sim_avg,T0,cell_tags)
     
@@ -325,6 +361,29 @@ for nn in range(16):
         
     strain_field.interpolate( strain_field_expr )
     
+    if strn_norm < strn_tolerance:
+        break    
+
+
+# In[ ]:
+
+
+results_xdmf_file = io.XDMFFile(comm,output_file_name,'w')
+results_xdmf_file.write_mesh(domain)
+
+ela.uh.name = 'displacement'
+results_xdmf_file.write_function(ela.uh, 0.0)
+
+strain_field.name = 'strain'
+results_xdmf_file.write_function(strain_field, 0.0)
+
+sigma  = fem.Function(T0)
+sigma_expr = fem.Expression(qx.sigs_e(strain_field), T0.element.interpolation_points())
+sigma.interpolate(sigma_expr)
+sigma.name = 'sigma'
+results_xdmf_file.write_function(sigma, 0.0)
+
+results_xdmf_file.close()
 
 
 # In[ ]:
@@ -333,16 +392,17 @@ for nn in range(16):
 # Write stress field to .bp file
 
 # DG1 space needed to write stress field
-T_DG1 = fem.TensorFunctionSpace(domain, ('DG', 1))
-sigma_DG1  = fem.Function(T_DG1)
-sigma_expr_DG1 = fem.Expression(qx.sigs_e(strain_field),
-                                    T_DG1.element.interpolation_points())
 
-sigma_DG1.interpolate(sigma_expr_DG1)
+# T_DG1 = fem.TensorFunctionSpace(domain, ('DG', 1))
+# sigma_DG1  = fem.Function(T_DG1)
+# sigma_expr_DG1 = fem.Expression(qx.sigs_e(strain_field),
+#                                     T_DG1.element.interpolation_points())
 
-vtx_sigma = io.VTXWriter(domain.comm, stress_field_VTX_name, [sigma_DG1._cpp_object])
-vtx_sigma.write(0)
-vtx_sigma.close()
+# sigma_DG1.interpolate(sigma_expr_DG1)
+
+# vtx_sigma = io.VTXWriter(domain.comm, stress_field_VTX_name, [sigma_DG1._cpp_object])
+# vtx_sigma.write(0)
+# vtx_sigma.close()
 
 
 # In[ ]:

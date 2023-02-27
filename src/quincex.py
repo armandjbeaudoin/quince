@@ -271,7 +271,11 @@ class Incompatibility:
     Project strain onto domain using curl to develop incompatible strain.
     """
     
-    def __init__(self,domain,strain):
+    def __init__(self,domain,strain,use_solver='ams',view_solver=False):
+        
+        self.comm = domain.comm
+        self.rank = self.comm.Get_rank()
+
         self.PN = fem.FunctionSpace(domain, ("Nedelec 1st kind H(curl)", 1))
         self.T0 = fem.TensorFunctionSpace(domain, ('DG', 0))
         
@@ -305,7 +309,8 @@ class Incompatibility:
         # https://fenicsproject.discourse.group/t/boomeramg-in-dolfinx/7893/4
 
         self.X_solver = PETSc.KSP().create(MPI.COMM_WORLD)
-        
+
+
         # Set options
         opts = PETSc.Options()
         prefix = f"incompatibility_{id(self.X_solver)}"
@@ -315,22 +320,47 @@ class Incompatibility:
         
         # Set solver options
         opts = PETSc.Options()                
-#         opts[f"{option_prefix}ksp_monitor_true_residual"] = None
+
         opts[f"{option_prefix}ksp_rtol"] = 1.0e-10  # Poor results with 1e-5
         opts[f"{option_prefix}ksp_atol"] = 1.0e-16
-#         opts[f"{option_prefix}ksp_view"] = None
 
-        opts[f"{option_prefix}ksp_type"] = "cg" # "gmres" 
-        opts[f"{option_prefix}pc_type"] = "hypre"
-        opts[f"{option_prefix}pc_hypre_type"] = "ams" 
-#         opts[f"{option_prefix}pc_hypre_boomeramg_print_statistics"] = 1
-#         opts[f"{option_prefix}pc_hypre_ams_print_level"] = 3
-#         opts[f"{option_prefix}monitor_convergence"] = None
+        if use_solver=='ams':
+            opts[f"{option_prefix}ksp_type"] = "cg" # "gmres" 
+            opts[f"{option_prefix}pc_type"] = "hypre"
+            opts[f"{option_prefix}pc_hypre_type"] = "ams" 
+    #         opts[f"{option_prefix}pc_hypre_boomeramg_print_statistics"] = 1
+    #         opts[f"{option_prefix}pc_hypre_ams_print_level"] = 3
+    #         opts[f"{option_prefix}monitor_convergence"] = None
+
+            # Are these next two lines needed????
+    #         ksp_X = PETSc.KSP().create(domain.comm)
+    #         ksp_X.setType(PETSc.KSP.Type.CG)        
+
+        elif use_solver=='mumps':
+
+            opts[f"{option_prefix}ksp_type"] = "preonly"
+            opts[f"{option_prefix}pc_type"] = "lu"
+            opts[f"{option_prefix}pc_factor_mat_solver_type"] = "mumps"
+
+        # cg works with gamg with default arguments (uses jacobi and not ilu in subproblems)   
+        elif use_solver=="gamg":
+            opts[f"{option_prefix}ksp_type"] = "cg"
+            opts[f"{option_prefix}pc_type"] = "gamg"
+            
+        # cg works with jacobi (bjacobi uses ilu and doesn't work)
+        elif use_solver=="cg":
+            opts[f"{option_prefix}ksp_type"] = "cg"
+            opts[f"{option_prefix}pc_type"] = "jacobi"
         
-        # Are these next two lines needed????
-#         ksp_X = PETSc.KSP().create(domain.comm)
-#         ksp_X.setType(PETSc.KSP.Type.CG)        
-
+        # Default to the cg with jacobi preconditioner
+        else:
+            opts[f"{option_prefix}ksp_type"] = "cg"
+            opts[f"{option_prefix}pc_type"] = "jacobi"
+            
+        if view_solver:
+            opts[f"{option_prefix}ksp_view"] = None
+            opts[f"{option_prefix}ksp_monitor_true_residual"] = None
+            
         self.X_solver.setConvergenceHistory()
         self.X_solver.setFromOptions()
         
@@ -344,40 +374,41 @@ class Incompatibility:
 
         self.X_solver.setOperators(AX)
 
-        pc_X = self.X_solver.getPC()
+        if use_solver=='ams':
+            pc_X = self.X_solver.getPC()
 
-        # Additional things needed by AMS solver
-        # Discrete gradient matrix
-        # The order of arguments for cpp is reversed order in old FEniCS python call
-        # see
-        # https://github.com/FEniCS/dolfinx/blob/main/cpp/dolfinx/fem/discreteoperators.h
-        # where V0 is the Lagrange space and 
-        # https://fenics.readthedocs.io/projects/dolfin/en/2017.2.0/apis/api_fem.html#discreteoperators
-        # where V0 is the Nedelec space
-        
-        PL = fem.FunctionSpace(domain,("CG", 1))._cpp_object
-        G = discrete_gradient(PL, self.PN._cpp_object)
-        G.assemble()
-        pc_X.setHYPREDiscreteGradient(G)
+            # Additional things needed by AMS solver
+            # Discrete gradient matrix
+            # The order of arguments for cpp is reversed order in old FEniCS python call
+            # see
+            # https://github.com/FEniCS/dolfinx/blob/main/cpp/dolfinx/fem/discreteoperators.h
+            # where V0 is the Lagrange space and 
+            # https://fenics.readthedocs.io/projects/dolfin/en/2017.2.0/apis/api_fem.html#discreteoperators
+            # where V0 is the Nedelec space
 
-        # Constant vector fields
-        cvec_0 = fem.Function(self.PN)
-        cvec_0.interpolate(lambda x: np.vstack((np.ones_like(x[0]),
-                                                np.zeros_like(x[0]),
-                                                np.zeros_like(x[0]))))
-        cvec_1 = fem.Function(self.PN)
-        cvec_1.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
-                                                np.ones_like(x[0]),
-                                                np.zeros_like(x[0]))))
-        cvec_2 = fem.Function(self.PN)
-        cvec_2.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
-                                                np.zeros_like(x[0]),
-                                                np.ones_like(x[0]))))
-        pc_X.setHYPRESetEdgeConstantVectors(cvec_0.vector,
-                                            cvec_1.vector,
-                                            cvec_2.vector)
-        
-        pc_X.setHYPRESetBetaPoissonMatrix(None) #ams
+            PL = fem.FunctionSpace(domain,("CG", 1))._cpp_object
+            G = discrete_gradient(PL, self.PN._cpp_object)
+            G.assemble()
+            pc_X.setHYPREDiscreteGradient(G)
+
+            # Constant vector fields
+            cvec_0 = fem.Function(self.PN)
+            cvec_0.interpolate(lambda x: np.vstack((np.ones_like(x[0]),
+                                                    np.zeros_like(x[0]),
+                                                    np.zeros_like(x[0]))))
+            cvec_1 = fem.Function(self.PN)
+            cvec_1.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
+                                                    np.ones_like(x[0]),
+                                                    np.zeros_like(x[0]))))
+            cvec_2 = fem.Function(self.PN)
+            cvec_2.interpolate(lambda x: np.vstack((np.zeros_like(x[0]),
+                                                    np.zeros_like(x[0]),
+                                                    np.ones_like(x[0]))))
+            pc_X.setHYPRESetEdgeConstantVectors(cvec_0.vector,
+                                                cvec_1.vector,
+                                                cvec_2.vector)
+
+            pc_X.setHYPRESetBetaPoissonMatrix(None) #ams
 
         self.X  = fem.Function(self.T0)
         
@@ -402,13 +433,39 @@ class Incompatibility:
             
             # see https://fenicsproject.discourse.group/t/dirichlet-boundary-conditions-hcurl/9932/4
             # and link in answer to https://github.com/FEniCS/dolfinx/blob/main/python/demo/demo_stokes.py#L460-L466
-            bX = fem.petsc.assemble_vector(self.linear_forms[i])
+
+#             self.comm.Barrier()
+#             print(self.rank,i,'Before assemble', flush=True)    
+            # bX = fem.petsc.assemble_vector(self.linear_forms[i])
+            
+            # Alternative.  If this works, maybe re-use vectors?
+            bX = fem.petsc.create_vector(self.linear_forms[i])
+            with bX.localForm() as loc_b:
+                loc_b.set(0)
+            fem.petsc.assemble_vector(bX, self.linear_forms[i])            
+            
+#             self.comm.Barrier()
+#             print(self.rank,i,'Before lifting', flush=True) 
             fem.petsc.apply_lifting(bX, [self.bilinear_form], bcs=[[self.bc_X]])
+            
+#             self.comm.Barrier()           
+#             print(self.rank,i,'Before ghost update', flush=True) 
             bX.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+                        
+#             self.comm.Barrier()           
+#             print(self.rank,i,'Before petsc.set_bc', flush=True)             
             fem.petsc.set_bc(bX, [self.bc_X])         
 
+#             print(self.rank,i,'Before solver', flush=True)              
+#             self.comm.Barrier()
             self.X_solver.solve(bX, self.Xh[i].vector)
+            
+#             print(self.rank,i,'Before scatter', flush=True)              
+#             self.comm.Barrier()
             self.Xh[i].x.scatter_forward()
+            
+#             print(self.rank,i,'After scatter', flush=True)              
+#             self.comm.Barrier()
 
         self.X.interpolate(self.X_expr)
         
