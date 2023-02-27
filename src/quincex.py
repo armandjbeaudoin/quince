@@ -342,10 +342,19 @@ class Incompatibility:
             opts[f"{option_prefix}pc_type"] = "lu"
             opts[f"{option_prefix}pc_factor_mat_solver_type"] = "mumps"
 
-        # cg works with gamg with default arguments (uses jacobi and not ilu in subproblems)   
+        # cg works with gamg with default arguments (uses jacobi and not ilu in subproblems)  
+        # see https://fenicsproject.discourse.group/t/boomeramg-in-dolfinx/7893/4
+        # for example of setting null space.  Try options from elasticity solve (with jacobi preconditioner)
         elif use_solver=="gamg":
             opts[f"{option_prefix}ksp_type"] = "cg"
             opts[f"{option_prefix}pc_type"] = "gamg"
+                        # Use Chebyshev smoothing for multigrid
+            opts[f"{option_prefix}mg_levels_ksp_type"] = "chebyshev"
+            opts[f"{option_prefix}mg_levels_pc_type"] = "jacobi"
+
+            # Improve estimate of eigenvalues for Chebyshev smoothing
+            opts[f"{option_prefix}mg_levels_esteig_ksp_type"] = "cg"
+            opts[f"{option_prefix}mg_levels_ksp_chebyshev_esteig_steps"] = 20
             
         # cg works with jacobi (bjacobi uses ilu and doesn't work)
         elif use_solver=="cg":
@@ -371,6 +380,11 @@ class Incompatibility:
 
         AX = fem.petsc.assemble_matrix(self.bilinear_form, bcs=[self.bc_X])
         AX.assemble()
+        
+        # see https://fenicsproject.discourse.group/t/boomeramg-in-dolfinx/7893/4 for gamg nullspace with curl-curl            
+        if use_solver=='gamg':
+            nullspace = PETSc.NullSpace().create(constant=True)
+            AX.setNearNullSpace(nullspace)
 
         self.X_solver.setOperators(AX)
 
@@ -408,7 +422,7 @@ class Incompatibility:
                                                 cvec_1.vector,
                                                 cvec_2.vector)
 
-            pc_X.setHYPRESetBetaPoissonMatrix(None) #ams
+            pc_X.setHYPRESetBetaPoissonMatrix(None) #ams            
 
         self.X  = fem.Function(self.T0)
         
