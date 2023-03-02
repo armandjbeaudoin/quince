@@ -3,7 +3,7 @@
 
 # # Introduce incompatible deformation from HEDM into elasticity calculation
 
-# In[ ]:
+# In[1]:
 
 
 # Input files:
@@ -24,8 +24,21 @@ y_displacement = 0.00405
 # Tolerance on relative strain norm
 strn_tolerance = 0.02
 
+# option for grain averages
+# For assembly of individual grain averages use True; requires extensive compilation
+# For indicator function use False, see
+#    https://fenicsproject.discourse.group/t/is-there-a-more-efficient-way-to-many-integrals-over-subdomains/10423
+individual_grain_average = True
 
-# In[ ]:
+# Compilation options
+# jit_parameters = {"cffi_extra_compile_args": ["-Ofast", "-march=native"], 
+#                   "cache_dir": cache_dir, "cffi_libraries": ["m"]}
+
+jit_parameters = {"cffi_extra_compile_args": ["-O2"], 
+                  "cache_dir": cache_dir, "cffi_libraries": ["m"]}
+
+
+# In[2]:
 
 
 # add parent directory to path
@@ -55,7 +68,7 @@ import ufl
 import matplotlib.pyplot as plt
 
 
-# In[ ]:
+# In[3]:
 
 
 # Elasticity properties
@@ -72,7 +85,7 @@ estf = qx.Chcp(x_0['Stiffness'][0],
                x_0['Stiffness'][4] )
 
 
-# In[ ]:
+# In[4]:
 
 
 # Find rank of this process
@@ -80,14 +93,14 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 
 
-# In[ ]:
+# In[5]:
 
 
 # Read mesh from gmsh .msh file, using gmshio
 # domain, cell_tags, facet_tags = gmshio.read_from_msh(mesh_file + '.msh', MPI.COMM_WORLD, 0, gdim=3)
 
 
-# In[ ]:
+# In[6]:
 
 
 # Read from .xdmf
@@ -97,7 +110,7 @@ cell_tags = f_mesh.read_meshtags(domain,name='Cell tags')
 f_mesh.close()
 
 
-# In[ ]:
+# In[7]:
 
 
 # Create facet to cell connectivity required to determine boundary facets
@@ -107,7 +120,7 @@ domain.topology.create_connectivity(fdim, tdim)
 boundary_facets = msh.exterior_facet_indices(domain.topology)
 
 
-# In[ ]:
+# In[8]:
 
 
 dof_min, dof_max =  np.zeros((3)), np.zeros((3))
@@ -127,13 +140,13 @@ print(rank,np.max(domain.geometry.x,axis=0),dof_max,flush=True)
 qx.boundary_min_max(dof_min,dof_max)
 
 
-# In[ ]:
+# In[9]:
 
 
 n_grains = cell_tags.values.max()
 
 
-# In[ ]:
+# In[10]:
 
 
 #  Get number of grains on each processor
@@ -142,7 +155,7 @@ n_grains = comm.allreduce( n_grains, op = MPI.MAX)
 print(rank,'after',n_grains,flush=True)
 
 
-# In[ ]:
+# In[11]:
 
 
 T0 = fem.TensorFunctionSpace(domain, ('DG', 0))
@@ -158,13 +171,11 @@ exp_strn = np.loadtxt(strains_file)
 exp_strain  = qx.tprop2grains(exp_strn,T0,cell_tags)
 
 
-# In[ ]:
+# In[12]:
 
 
 # Fields for strain, plastic deformation, and (strain) result from simulation
 strain_field = fem.Function(T0)
-
-V_0 = fem.FunctionSpace(domain, ('DG',0))
 
 Up = fem.Function(T0)
 Up.interpolate(lambda x: np.zeros((9,x.shape[1])))
@@ -173,20 +184,27 @@ sim_strn = fem.Function(T0)
 sim_strn.interpolate(lambda x: np.zeros((9,x.shape[1])))
 
 
-# In[ ]:
+# In[13]:
 
 
 # Develop integration measure for grains
-dx_grain = []
 
-for i in range(n_grains):
-    dx_grain.append( ufl.Measure("dx", domain=domain, subdomain_data=cell_tags, subdomain_id=(i+1)) )
+if individual_grain_average:    
+    dx_grain = []
+
+    for i in range(n_grains):
+        dx_grain.append( ufl.Measure("dx", domain=domain, subdomain_data=cell_tags, subdomain_id=(i+1)) )
+else:
+    dx = ufl.Measure("dx", domain=domain)
 
 
-# In[ ]:
+# In[14]:
 
 
-# Expression to handle single component of strain tensor
+# Expression to handle single component of strain tensor, 
+# needed for both approaches to grain averages
+
+V_0 = fem.FunctionSpace(domain, ('DG',0))
 
 eij = fem.Function(V_0)
 eij.interpolate(lambda x: np.zeros((x.shape[1])))
@@ -199,30 +217,29 @@ for ii in range(3):
                                         V_0.element.interpolation_points()) )
 
 
-# In[ ]:
+# In[15]:
 
 
-# Pre-compile all of the forms for averaging grain values (this takes a while)
+# Pre-compile all of the forms for averaging individual grain values 
+# This can take a while, but only needs to be done once
 
-# jit_parameters = {"cffi_extra_compile_args": ["-Ofast", "-march=native"], 
-#                   "cache_dir": cache_dir, "cffi_libraries": ["m"]}
+if individual_grain_average:
+    grain_forms_compiled = []
+    start_time = time.process_time()
+    for i in range(n_grains):
+        f = []
+        if rank==0 and (i%100)==0:
+            print(i,flush=True)
+        grain_forms_compiled.append( fem.form(eij*dx_grain[i], jit_options=jit_parameters) )               
 
-jit_parameters = {"cffi_extra_compile_args": ["-O2"], 
-                  "cache_dir": cache_dir, "cffi_libraries": ["m"]}
+    print(rank,'form compilation',time.process_time() - start_time)
 
-grain_forms_compiled = []
-start_time = time.process_time()
-for i in range(n_grains):
-    f = []
-    if rank==0 and (i%100)==0:
-        print(i,flush=True)
-
-    grain_forms_compiled.append( fem.form(eij*dx_grain[i], jit_options=jit_parameters) )               
-            
-print(rank,'form compilation',time.process_time() - start_time)
+else:
+    grain_indicator = fem.Function(V_0)   # Indicator function for selecting grains
+    grain_form = fem.form(grain_indicator*eij*dx, jit_options=jit_parameters)
 
 
-# In[ ]:
+# In[16]:
 
 
 vol_grain = np.zeros((n_grains))
@@ -231,35 +248,42 @@ v_total = 0.0
 eij.interpolate(lambda x: np.ones((x.shape[1])))
 
 for i in range(n_grains):
-    vol_grain[i] = comm.allreduce( fem.assemble_scalar(grain_forms_compiled[i]), op = MPI.SUM)
+    
+    if individual_grain_average:
+        vol_grain[i] = comm.allreduce( fem.assemble_scalar(grain_forms_compiled[i]), op = MPI.SUM)
+    else:
+        grain_indicator.x.set(0)
+        grain_indicator.x.array[cell_tags.find(i+1)] = 1
+        vol_grain[i] = comm.allreduce( fem.assemble_scalar(grain_form), op = MPI.SUM )
+        
     v_total += vol_grain[i]
     
 if rank==0:
     print('Volume is',v_total)
 
 
-# In[ ]:
+# In[17]:
 
 
-sim_avg = np.zeros((n_grains,9))
+# sim_avg = np.zeros((n_grains,9))
 
-start_time = time.process_time()
+# start_time = time.process_time()
 
-for j in range(9):
+# for j in range(9):
         
-    eij.interpolate(eij_expr[j])
+#     eij.interpolate(eij_expr[j])
     
-    for i in range(n_grains):
+#     for i in range(n_grains):
 
-        sim_avg[i,j] = comm.allreduce( \
-            fem.assemble_scalar( grain_forms_compiled[i]) / vol_grain[i],
-            op = MPI.SUM)
+#         sim_avg[i,j] = comm.allreduce( \
+#             fem.assemble_scalar( grain_forms_compiled[i]) / vol_grain[i],
+#             op = MPI.SUM)
 
-comm.Barrier()
-print(rank,'Form Execution',time.process_time() - start_time)
+# comm.Barrier()
+# print(rank,'Form Execution',time.process_time() - start_time)
 
 
-# In[ ]:
+# In[18]:
 
 
 # Develop reference solution, with no experimental correction
@@ -280,19 +304,26 @@ for j in range(9):
     eij.interpolate(eij_expr[j])
 
     for i in range(n_grains):
-        sim_avg[i,j] = comm.allreduce( \
-            fem.assemble_scalar( grain_forms_compiled[i]) / vol_grain[i], op = MPI.SUM)
 
+        if individual_grain_average:
+            sim_avg[i,j] = comm.allreduce( \
+                fem.assemble_scalar( grain_forms_compiled[i]) / vol_grain[i], op = MPI.SUM)
+        else:
+            grain_indicator.x.set(0)
+            grain_indicator.x.array[cell_tags.find(i+1)] = 1
+            sim_avg[i,j] = comm.allreduce( \
+                fem.assemble_scalar( grain_form) / vol_grain[i],
+                op = MPI.SUM)
 comm.Barrier()
 
-# if (rank==0):
-print(rank, 'Experimental strain error',np.linalg.norm(sim_avg[:] - exp_strn[:]))
-print(rank, 'Average y displacement is', np.mean(sim_avg[:,4]), flush=True)
+if (rank==0):
+    print(rank, 'Experimental strain error',np.linalg.norm(sim_avg[:] - exp_strn[:]))
+    print(rank, 'Average y displacement is', np.mean(sim_avg[:,4]), flush=True)
 
 ref_avg = copy.deepcopy(sim_avg)
 
 
-# In[ ]:
+# In[19]:
 
 
 # Loop
@@ -301,7 +332,7 @@ ref_avg = copy.deepcopy(sim_avg)
 strain_field.interpolate(exp_strain)
 # comm.Barrier()    
 # print(rank, 'Before Incompatibility initialize', flush=True)
-inc = qx.Incompatibility(domain,strain_field,use_solver='cg',view_solver=True)
+inc = qx.Incompatibility(domain,strain_field,use_solver='cg',view_solver=False)
 # comm.Barrier()    
 # print(rank, 'Incompatibility initialize', flush=True)
 
@@ -333,8 +364,15 @@ for nn in range(16):
         eij.interpolate(eij_expr[j])
 
         for i in range(n_grains):
-            sim_avg[i,j] = comm.allreduce( \
-                fem.assemble_scalar( grain_forms_compiled[i]) / vol_grain[i], op = MPI.SUM)
+            if individual_grain_average:
+                sim_avg[i,j] = comm.allreduce( \
+                    fem.assemble_scalar( grain_forms_compiled[i]) / vol_grain[i], op = MPI.SUM)
+            else:
+                grain_indicator.x.set(0)
+                grain_indicator.x.array[cell_tags.find(i+1)] = 1
+                sim_avg[i,j] = comm.allreduce( \
+                    fem.assemble_scalar( grain_form) / vol_grain[i],
+                    op = MPI.SUM)                
     
     # Develop the relative error norm as change in strain
     diff_sim_strn.interpolate(diff_strn_expr)
@@ -365,7 +403,7 @@ for nn in range(16):
         break    
 
 
-# In[ ]:
+# In[20]:
 
 
 results_xdmf_file = io.XDMFFile(comm,output_file_name,'w')
@@ -386,7 +424,7 @@ results_xdmf_file.write_function(sigma, 0.0)
 results_xdmf_file.close()
 
 
-# In[ ]:
+# In[21]:
 
 
 # Write stress field to .bp file
@@ -405,7 +443,7 @@ results_xdmf_file.close()
 # vtx_sigma.close()
 
 
-# In[ ]:
+# In[22]:
 
 
 # idx = 4
